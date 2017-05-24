@@ -3,12 +3,12 @@ import numpy as np
 from sklearn.metrics import confusion_matrix, roc_curve, auc
 import matplotlib.pyplot as plt
 from keras.models import Sequential
-from keras.layers import Dense
-from keras.layers import LSTM, Dropout
+from keras.layers import Dense,Bidirectional
+from keras.layers import LSTM, Dropout, GRU, Convolution1D,  MaxPooling1D, Flatten
 from keras import optimizers
 from itertools import cycle
 import itertools
-
+from sklearn import preprocessing
 
 def plot_confusion_matrix(test_y, pred_y, class_names, filename):
     """
@@ -87,7 +87,7 @@ def extract_segments(data, window_size):
     labels = np.empty((0))
     for (start, end) in windows(data, window_size):
         if (len(data.ix[start:end]) == (window_size)):
-            signal = data.ix[start:end][range(2, 16)]
+            signal = data.ix[start:end][range(1, 16)]
             if segments is None:
                 segments = signal
             else:
@@ -96,33 +96,9 @@ def extract_segments(data, window_size):
     return segments, labels
 
 
-if __name__ == '__main__':
-
-    """Hyperparameters"""
-    win_size = 89
-    num_var = 14
-    split_ratio = 0.8
-
-    """Load data:
-    segment: Each time series of 89 samples is named as segment.
-    label: Each segment is associated with a label
-    """
-    data = read_data("Multi-variate-Time-series-Data.xlsx")
-    segments, labels = extract_segments(data, win_size)
-    labels = np.asarray(pd.get_dummies(labels), dtype=np.int8)
-    reshaped_segments = segments.reshape(
-        [len(segments) / (win_size), (win_size), num_var])
-
-    """Create Train and Test Split based on split ratio"""
-
-    train_test_split = np.random.rand(len(reshaped_segments)) < split_ratio
-    train_x = reshaped_segments[train_test_split]
-    train_y = labels[train_test_split]
-    test_x = reshaped_segments[~train_test_split]
-    test_y = labels[~train_test_split]
-
-    # create and fit the LSTM network
+def LSTM_model(num_var,win_size):
     model = Sequential()
+
     model.add(LSTM(128, input_dim=num_var, input_length=win_size, return_sequences=True))
     model.add(Dropout(0.2))
     model.add(LSTM(128, return_sequences=False))
@@ -133,9 +109,106 @@ if __name__ == '__main__':
     model.compile(optimizer='adam', loss='categorical_crossentropy',
                   metrics=['accuracy'])
     model.summary()
+    return model
+
+def BiLSTM_model():
+    model = Sequential()
+    #model.add(Bidirectional(LSTM(128,return_sequences=True), input_dim=num_var, input_length=win_size))
+    #model.add(Bidirectional(LSTM(10, return_sequences=True), input_shape=(5, 10)))
+    model.add(Bidirectional(LSTM(128, return_sequences=True), input_shape=(89, 14)))
+    model.add(Dropout(0.2))
+    model.add(Bidirectional(LSTM(128, return_sequences=False)))
+    model.add(Dropout(0.2))
+    model.add(Dense(128, activation='relu'))
+    model.add(Dropout(0.2))
+    model.add(Dense(3, activation='softmax'))
+    opt = optimizers.Adam(lr=0.001, beta_1=0.9, beta_2=0.999,
+                          epsilon=1e-08, decay=0.0)
+    model.compile(optimizer='adam', loss='categorical_crossentropy',
+                  metrics=['accuracy'])
+    model.summary()
+    return model
+
+# def CNN_model():
+#     model = Sequential()
+#     return model
+
+def CNN_model(window_size=89, filter_length=1, nb_input_series=14, nb_outputs=3, nb_filter=89):
+    """:Return: a Keras Model for predicting the next value in a timeseries given a fixed-size lookback window of previous values.
+    The model can handle multiple input timeseries (`nb_input_series`) and multiple prediction targets (`nb_outputs`).
+    :param int window_size: The number of previous timeseries values to use as input features.  Also called lag or lookback.
+    :param int nb_input_series: The number of input timeseries; 1 for a single timeseries.
+      The `X` input to ``fit()`` should be an array of shape ``(n_instances, window_size, nb_input_series)``; each instance is
+      a 2D array of shape ``(window_size, nb_input_series)``.  For example, for `window_size` = 3 and `nb_input_series` = 1 (a
+      single timeseries), one instance could be ``[[0], [1], [2]]``. See ``make_timeseries_instances()``.
+    :param int nb_outputs: The output dimension, often equal to the number of inputs.
+      For each input instance (array with shape ``(window_size, nb_input_series)``), the output is a vector of size `nb_outputs`,
+      usually the value(s) predicted to come after the last value in that input instance, i.e., the next value
+      in the sequence. The `y` input to ``fit()`` should be an array of shape ``(n_instances, nb_outputs)``.
+    :param int filter_length: the size (along the `window_size` dimension) of the sliding window that gets convolved with
+      each position along each instance. The difference between 1D and 2D convolution is that a 1D filter's "height" is fixed
+      to the number of input timeseries (its "width" being `filter_length`), and it can only slide along the window
+      dimension.  This is useful as generally the input timeseries have no spatial/ordinal relationship, so it's not
+      meaningful to look for patterns that are invariant with respect to subsets of the timeseries.
+    :param int nb_filter: The number of different filters to learn (roughly, input patterns to recognize).
+    """
+    model = Sequential((
+        # The first conv layer learns `nb_filter` filters (aka kernels), each of size ``(filter_length, nb_input_series)``.
+        # Its output will have shape (None, window_size - filter_length + 1, nb_filter), i.e., for each position in
+        # the input timeseries, the activation of each filter at that position.
+        Convolution1D(nb_filter=nb_filter, filter_length=filter_length, activation='relu', input_shape=(window_size, nb_input_series)),
+        MaxPooling1D(),     # Downsample the output of convolution by 2X.
+        Convolution1D(nb_filter=nb_filter, filter_length=filter_length, activation='relu'),
+        MaxPooling1D(),
+        Flatten(),
+        Dense(nb_outputs, activation='linear'),     # For binary classification, change the activation to 'sigmoid'
+    ))
+    model.compile(optimizer='adam', loss='categorical_crossentropy',
+                  metrics=['accuracy'])
+    # To perform (binary) classification instead:
+    # model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['binary_accuracy'])
+    return model
+
+
+if __name__ == '__main__':
+
+    """Hyperparameters"""
+    win_size = 89
+    num_var = 15
+    split_ratio = 0.8
+
+    """Load data:
+    segment: Each time series of 89 samples is named as segment.
+    label: Each segment is associated with a label
+    """
+    #data = read_data("Multi-variate-Time-series-Data.xlsx")
+    data = read_data("multi-variate-large-set.xlsx")
+    segments, labels = extract_segments(data, win_size)
+    labels = np.asarray(pd.get_dummies(labels), dtype=np.int8)
+    segments_scaled = preprocessing.scale(segments)
+    scaler = preprocessing.StandardScaler().fit(segments_scaled)
+    reshaped_segments = segments_scaled.reshape(
+        [len(segments) / (win_size), (win_size), num_var])
+
+    """Create Train and Test Split based on split ratio"""
+
+    train_test_split = np.random.rand(len(reshaped_segments)) < split_ratio
+    train_x = reshaped_segments[train_test_split]
+    train_y = labels[train_test_split]
+    test_x = reshaped_segments[~train_test_split]
+    test_y = labels[~train_test_split]
+
+    # create  the Network
+
+    #model=CNN_model()
+    model = LSTM_model(num_var,win_size)
+    #model = BiLSTM_model(num_var,win_size)
+
 
     # Fit the network
-    model.fit(train_x, train_y, nb_epoch=48, batch_size=149,
+
+
+    model.fit(train_x, train_y, nb_epoch=1000, batch_size=149,
               verbose=2, validation_split=0.1)
 
     # Predict Test Data and Plot ROC
